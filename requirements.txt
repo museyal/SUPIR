@@ -19,7 +19,7 @@ einops==0.7.0
 einops-exts==0.0.4
 timm==0.9.8
 openai-clip==1.0.1
-fsspec==2023.4.0
+fsspec>=2023.5.0
 kornia==0.6.9
 matplotlib==3.7.1
 ninja==1.11.1
