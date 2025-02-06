@@ -13,6 +13,11 @@ from CKPT_PTH import LLAVA_MODEL_PATH
 import einops
 import copy
 import time
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+FastAPI.model_config = {"arbitrary_types_allowed": True}
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--opt", type=str, default='options/SUPIR_v0.yaml')
