@@ -56,15 +56,20 @@ def load_QF_ckpt(config_path):
     ckpt_Q = torch.load(config.SUPIR_CKPT_Q, map_location='cpu', weights_only=True)
     return ckpt_Q, ckpt_F
 
-def load_Q_ckpt(config_path):
+def load_ckpt(config_path, supir_sign: str = 'Q', pruned: bool = False):
     config = OmegaConf.load(config_path)
-    ckpt_Q = torch.load(config.SUPIR_CKPT_Q, map_location='cpu', weights_only=True)
-    return ckpt_Q
+    
+    if supir_sign not in ['Q', 'F']:
+        print(f'Invalid supir_sign: {supir_sign}. Valid values are: Q, F. Using Q model instead.')
+        supir_sign = 'Q'
+    
+    ckpt_key = f'SUPIR_CKPT_{supir_sign}'
 
-def load_F_ckpt(config_path):
-    config = OmegaConf.load(config_path)
-    ckpt_F = torch.load(config.SUPIR_CKPT_F, map_location='cpu', weights_only=True)
-    return ckpt_F
+    try:
+        return torch.load(config[ckpt_key], map_location='cpu', weights_only=not pruned)
+    except Exception as e:
+        print(f'Error loading checkpoint: {e}. Trying again with weights_only={pruned}.')
+        return torch.load(config[ckpt_key], map_location='cpu', weights_only=pruned)
 
 
 def PIL2Tensor(img, upsacle=1, min_size=1024, fix_resize=None):
