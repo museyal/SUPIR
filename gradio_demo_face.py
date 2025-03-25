@@ -8,8 +8,6 @@ import numpy as np
 import torch
 from SUPIR.util import create_SUPIR_model, load_QF_ckpt
 from PIL import Image
-from llava.llava_agent import LLavaAgent
-from CKPT_PTH import LLAVA_MODEL_PATH
 import einops
 import copy
 import time
@@ -19,24 +17,17 @@ from SUPIR.utils.face_restoration_helper import FaceRestoreHelper
 parser = argparse.ArgumentParser()
 parser.add_argument("--ip", type=str, default='127.0.0.1')
 parser.add_argument("--port", type=int, default='6688')
-parser.add_argument("--no_llava", action='store_true', default=False)
 parser.add_argument("--use_image_slider", action='store_true', default=False)
 parser.add_argument("--log_history", action='store_true', default=False)
 parser.add_argument("--loading_half_params", action='store_true', default=False)
 parser.add_argument("--use_tile_vae", action='store_true', default=False)
-parser.add_argument("--load_8bit_llava", action='store_true', default=False)
 parser.add_argument("--local_prompt", action='store_true', default=False)
 args = parser.parse_args()
 server_ip = args.ip
 server_port = args.port
-use_llava = not args.no_llava
 
-if torch.cuda.device_count() >= 2:
+if torch.cuda.device_count() >= 1:
     SUPIR_device = 'cuda:0'
-    LLaVA_device = 'cuda:1'
-elif torch.cuda.device_count() == 1:
-    SUPIR_device = 'cuda:0'
-    LLaVA_device = 'cuda:0'
 else:
     raise ValueError('Currently support CUDA only.')
 
@@ -53,11 +44,7 @@ model.first_stage_model.denoise_encoder_s1 = copy.deepcopy(model.first_stage_mod
 model.current_model = 'v0-Q'
 ckpt_Q, ckpt_F = load_QF_ckpt('options/SUPIR_v0.yaml')
 
-# load LLaVA
-if use_llava:
-    llava_agent = LLavaAgent(LLAVA_MODEL_PATH, device=LLaVA_device, load_8bit=args.load_8bit_llava, load_4bit=False)
-else:
-    llava_agent = None
+# No LLAVA implementation needed
 
 # load face helper
 face_helper = FaceRestoreHelper(
@@ -95,26 +82,16 @@ def llave_process(input_image, upscale, temperature, top_p, qs=None):
     LQ = model.batchify_denoise(LQ, is_stage1=True)
 
     LQ = (LQ[0].permute(1, 2, 0) * 127.5 + 127.5).cpu().numpy().round().clip(0, 255).astype(np.uint8)
-    LQs = [Image.fromarray(LQ)]
-
+    
     face_helper.clean_all()
     face_helper.read_image(LQ)
     # get face landmarks for each face
     face_helper.get_face_landmarks_5(only_center_face=False, resize=640, eye_dist_threshold=5)
     face_helper.align_warp_face()
-
-    for face in face_helper.cropped_faces:
-        LQs.append(Image.fromarray(face))
-
-    captions = []
-    torch.cuda.set_device(LLaVA_device)
-    if use_llava:
-        for LQ in LQs:
-            captions += llava_agent.gen_image_caption([LQ], temperature=temperature, top_p=top_p, qs=qs)
-    else:
-        captions = ['LLaVA is not available. Please add text manually.']
-    del LQs[0]
-    return str(captions), [np.array(face) for face in LQs]
+    
+    # LLAVA implementation removed
+    caption = 'LLAVA is not available. Please add text manually.'
+    return caption, [np.array(face) for face in face_helper.cropped_faces]
 
 
 def stage2_process(input_image, prompt, a_prompt, n_prompt, num_samples, upscale, edm_steps, s_stage1, s_stage2,
@@ -154,10 +131,14 @@ def stage2_process(input_image, prompt, a_prompt, n_prompt, num_samples, upscale
     LQ = LQ / 255 * 2 - 1
     LQ = torch.tensor(LQ, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(SUPIR_device)[:, :3, :, :]
 
-    if use_llava and prompt != '':
-        captions = eval(prompt)
-    else:
-        captions = [''] * (1 + len(face_helper.cropped_faces))
+    # LLAVA implementation removed
+    captions = [''] * (1 + len(face_helper.cropped_faces))
+    # Use the provided prompt for the first caption if it exists
+    if prompt and prompt != 'LLAVA is not available. Please add text manually.':
+        try:
+            captions = eval(prompt)
+        except:
+            captions = [''] * (1 + len(face_helper.cropped_faces))
 
     bg_caption, face_captions = captions[0], captions[1:]
 

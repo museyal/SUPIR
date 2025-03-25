@@ -8,8 +8,6 @@ import numpy as np
 import torch
 from SUPIR.util import create_SUPIR_model, load_QF_ckpt
 from PIL import Image
-from llava.llava_agent import LLavaAgent
-from CKPT_PTH import LLAVA_MODEL_PATH
 import einops
 import copy
 import time
@@ -19,26 +17,19 @@ from sgm.modules.diffusionmodules.sampling import _sliding_windows
 parser = argparse.ArgumentParser()
 parser.add_argument("--ip", type=str, default='127.0.0.1')
 parser.add_argument("--port", type=int, default='6688')
-parser.add_argument("--no_llava", action='store_true', default=False)
 parser.add_argument("--use_image_slider", action='store_true', default=False)
 parser.add_argument("--log_history", action='store_true', default=False)
 parser.add_argument("--loading_half_params", action='store_true', default=False)
 parser.add_argument("--use_tile_vae", action='store_true', default=False)
 parser.add_argument("--encoder_tile_size", type=int, default=512)
 parser.add_argument("--decoder_tile_size", type=int, default=64)
-parser.add_argument("--load_8bit_llava", action='store_true', default=False)
 parser.add_argument("--local_prompt", action='store_true', default=False)
 args = parser.parse_args()
 server_ip = args.ip
 server_port = args.port
-use_llava = not args.no_llava
 
-if torch.cuda.device_count() >= 2:
+if torch.cuda.device_count() >= 1:
     SUPIR_device = 'cuda:0'
-    LLaVA_device = 'cuda:1'
-elif torch.cuda.device_count() == 1:
-    SUPIR_device = 'cuda:0'
-    LLaVA_device = 'cuda:0'
 else:
     raise ValueError('Currently support CUDA only.')
 
@@ -58,11 +49,7 @@ ckpt_Q, ckpt_F = load_QF_ckpt('options/SUPIR_v0.yaml')
 tile_size = config.model.params.sampler_config.params.tile_size * 8
 tile_stride = config.model.params.sampler_config.params.tile_stride * 8
 
-# load LLaVA
-if use_llava:
-    llava_agent = LLavaAgent(LLAVA_MODEL_PATH, device=LLaVA_device, load_8bit=args.load_8bit_llava, load_4bit=False)
-else:
-    llava_agent = None
+# No LLAVA implementation needed
 
 # only exhibit the overall quality of the stage1 output
 def stage1_process(input_image, gamma_correction):
@@ -83,32 +70,8 @@ def stage1_process(input_image, gamma_correction):
 
 def llave_process(input_image, upscale, temperature, top_p, qs=None):
     torch.cuda.set_device(SUPIR_device)
-    input_image = HWC3(input_image)
-    input_image = upscale_image(input_image, upscale, unit_resolution=32,
-                                min_size=1024)
-    LQ = np.array(input_image) / 255.0
-    LQ *= 255.0
-    LQ = LQ.round().clip(0, 255).astype(np.uint8)
-    LQ = LQ / 255 * 2 - 1
-    LQ = torch.tensor(LQ, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(SUPIR_device)[:, :3, :, :]
-    LQ = model.batchify_denoise(LQ, is_stage1=True)
-
-    _, _, h, w = LQ.shape
-    tiles_iterator = _sliding_windows(h, w, tile_size, tile_stride)
-    LQ_tiles = []
-    for hi, hi_end, wi, wi_end in tiles_iterator:
-        _LQ = LQ[:, :, hi:hi_end, wi:wi_end]
-        _LQ = (_LQ[0].permute(1, 2, 0) * 127.5 + 127.5).cpu().numpy().round().clip(0, 255).astype(np.uint8)
-        LQ_tiles.append(Image.fromarray(_LQ))
-
-    captions = []
-    torch.cuda.set_device(LLaVA_device)
-    if use_llava:
-        for LQ_tile in LQ_tiles:
-            captions += llava_agent.gen_image_caption([LQ_tile], temperature=temperature, top_p=top_p, qs=qs)
-    else:
-        captions = 'LLaVA is not available. Please add text manually.'
-    return str(captions)
+    # LLAVA implementation removed
+    return 'LLAVA is not available. Please add text manually.'
 
 
 def stage2_process(input_image, prompt, a_prompt, n_prompt, num_samples, upscale, edm_steps, s_stage1, s_stage2,
@@ -143,10 +106,8 @@ def stage2_process(input_image, prompt, a_prompt, n_prompt, num_samples, upscale
     LQ = LQ.round().clip(0, 255).astype(np.uint8)
     LQ = LQ / 255 * 2 - 1
     LQ = torch.tensor(LQ, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(SUPIR_device)[:, :3, :, :]
-    if use_llava:
-        captions = [eval(prompt)]
-    else:
-        captions = ['']
+    # LLAVA implementation removed
+    captions = [prompt] if prompt and prompt != 'LLAVA is not available. Please add text manually.' else ['']
 
     model.ae_dtype = convert_dtype(ae_dtype)
     model.model.dtype = convert_dtype(diff_dtype)
