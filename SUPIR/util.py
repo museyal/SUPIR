@@ -64,12 +64,28 @@ def load_ckpt(config_path, supir_sign: str = 'Q', pruned: bool = False):
         supir_sign = 'Q'
     
     ckpt_key = f'SUPIR_CKPT_{supir_sign}'
-
+    ckpt_path = config[ckpt_key]
+    
+    # Check file extension to determine loading method
+    _, extension = os.path.splitext(ckpt_path)
+    
     try:
-        return torch.load(config[ckpt_key], map_location='cpu', weights_only=not pruned)
+        if extension.lower() == ".safetensors":
+            # For safetensors format (pruned models)
+            import safetensors.torch
+            return safetensors.torch.load_file(ckpt_path, device='cpu')
+        else:
+            # For .ckpt format (full models)
+            return torch.load(ckpt_path, map_location='cpu', weights_only=not pruned)
     except Exception as e:
-        print(f'Error loading checkpoint: {e}. Trying again with weights_only={pruned}.')
-        return torch.load(config[ckpt_key], map_location='cpu', weights_only=pruned)
+        print(f'Error loading checkpoint: {e}. Trying alternative loading method.')
+        if extension.lower() == ".safetensors":
+            # Try alternative loading for safetensors
+            import safetensors.torch
+            return safetensors.torch.load_file(ckpt_path, device='cpu')
+        else:
+            # Try alternative loading for .ckpt
+            return torch.load(ckpt_path, map_location='cpu', weights_only=pruned)
 
 
 def PIL2Tensor(img, upsacle=1, min_size=1024, fix_resize=None):
