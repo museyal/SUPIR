@@ -56,6 +56,26 @@ def load_QF_ckpt(config_path):
     ckpt_Q = torch.load(config.SUPIR_CKPT_Q, map_location='cpu', weights_only=True)
     return ckpt_Q, ckpt_F
 
+def load_Q_ckpt(config_path):
+    config = OmegaConf.load(config_path)
+    _, extension = os.path.splitext(config.SUPIR_CKPT_Q)
+    
+    if extension.lower() == ".safetensors":
+        # For safetensors format (pruned models)
+        import safetensors.torch
+        return safetensors.torch.load_file(config.SUPIR_CKPT_Q, device='cpu')
+    else:
+        return torch.load(config.SUPIR_CKPT_Q, map_location='cpu', weights_only=True)
+
+def load_F_ckpt(config_path):
+    config = OmegaConf.load(config_path)
+    _, extension = os.path.splitext(config.SUPIR_CKPT_F)
+    if extension.lower() == ".safetensors":
+        import safetensors.torch
+        return safetensors.torch.load_file(config.SUPIR_CKPT_F, device='cpu')
+    else:
+        return torch.load(config.SUPIR_CKPT_F, map_location='cpu', weights_only=True)
+
 def load_ckpt(config_path, supir_sign: str = 'Q', pruned: bool = False):
     config = OmegaConf.load(config_path)
     
@@ -71,7 +91,6 @@ def load_ckpt(config_path, supir_sign: str = 'Q', pruned: bool = False):
     
     try:
         if extension.lower() == ".safetensors":
-            # For safetensors format (pruned models)
             import safetensors.torch
             return safetensors.torch.load_file(ckpt_path, device='cpu')
         else:
