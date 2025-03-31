@@ -156,3 +156,10 @@ SUPIR_CKPT_F: /opt/data/private/AIGC_pretrain/SUPIR_cache/SUPIR-v0F.ckpt
 SUPIR_CKPT_Q: /opt/data/private/AIGC_pretrain/SUPIR_cache/SUPIR-v0Q.ckpt
 SUPIR_CKPT: ~
 
+default_setting:
+  s_cfg_Quality: 7.5
+  spt_linear_CFG_Quality: 4.0
+  s_cfg_Fidelity: 4.0
+  spt_linear_CFG_Fidelity: 1.0
+  edm_steps: 50
+
