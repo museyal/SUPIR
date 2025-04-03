@@ -31,24 +31,100 @@ def create_model(config_path):
     return model
 
 
-def create_SUPIR_model(config_path, SUPIR_sign=None, load_default_setting=False):
+def create_SUPIR_model(config_path, SUPIR_sign=None, load_default_setting=False, load_weights=True):
     config = OmegaConf.load(config_path)
-    model = instantiate_from_config(config.model).cpu()
+    model = instantiate_from_config(config.model)
     print(f'Loaded model config from [{config_path}]')
-    if config.SDXL_CKPT is not None:
-        model.load_state_dict(load_state_dict(config.SDXL_CKPT), strict=False)
-    if config.SUPIR_CKPT is not None:
-        model.load_state_dict(load_state_dict(config.SUPIR_CKPT), strict=False)
-    if SUPIR_sign is not None:
-        assert SUPIR_sign in ['F', 'Q']
-        if SUPIR_sign == 'F':
-            model.load_state_dict(load_state_dict(config.SUPIR_CKPT_F), strict=False)
-        elif SUPIR_sign == 'Q':
-            model.load_state_dict(load_state_dict(config.SUPIR_CKPT_Q), strict=False)
+    
+    if load_weights:
+        if config.SDXL_CKPT is not None:
+            model.load_state_dict(load_state_dict(config.SDXL_CKPT), strict=False)
+        if config.SUPIR_CKPT is not None:
+            model.load_state_dict(load_state_dict(config.SUPIR_CKPT), strict=False)
+        if SUPIR_sign is not None:
+            assert SUPIR_sign in ['F', 'Q']
+            if SUPIR_sign == 'F':
+                model.load_state_dict(load_state_dict(config.SUPIR_CKPT_F), strict=False)
+            elif SUPIR_sign == 'Q':
+                model.load_state_dict(load_state_dict(config.SUPIR_CKPT_Q), strict=False)
+    
     if load_default_setting:
         default_setting = config.default_setting
         return model, default_setting
     return model
+
+def create_empty_SUPIR_model(config_path, SUPIR_sign=None):
+    """Create an empty SUPIR model structure without loading weights.
+    This helps avoid the meta tensor error during model instantiation.
+    
+    Args:
+        config_path: Path to the SUPIR model config
+        SUPIR_sign: 'F' or 'Q' indicating which model variant to use
+        
+    Returns:
+        An instantiated but empty model structure
+    """
+    return create_SUPIR_model(config_path, SUPIR_sign=SUPIR_sign, load_weights=False)
+
+def apply_weights_to_model(model, state_dict, strict=False):
+    """Apply weights to a model using zero-copy techniques when possible.
+    
+    Args:
+        model: The model to load weights into
+        state_dict: Dictionary of parameter tensors
+        strict: Whether to strictly enforce that the keys in state_dict match the keys in the model
+        
+    Returns:
+        The model with weights applied
+    """
+    try:
+        # First try the standard way
+        incompatible_keys = model.load_state_dict(state_dict, strict=strict)
+        if incompatible_keys.missing_keys:
+            print(f"Missing keys: {len(incompatible_keys.missing_keys)}")
+        if incompatible_keys.unexpected_keys:
+            print(f"Unexpected keys: {len(incompatible_keys.unexpected_keys)}")
+        return model
+    except RuntimeError as e:
+        # If standard approach fails, try parameter by parameter
+        print(f"Standard loading failed: {e}. Trying parameter-by-parameter loading.")
+        
+        # Keep track of applied parameters
+        applied_params = 0
+        total_params = 0
+        
+        # Iterate over all named parameters
+        for name, param in model.named_parameters():
+            total_params += 1
+            if name in state_dict:
+                # Handle potential device mismatch
+                src_param = state_dict[name]
+                if param.shape == src_param.shape:
+                    # Zero-copy when possible by using storage offset
+                    try:
+                        param.data = src_param.data
+                        applied_params += 1
+                    except:
+                        # Fallback to copy
+                        param.data.copy_(src_param.data)
+                        applied_params += 1
+                else:
+                    print(f"Shape mismatch for {name}: {param.shape} vs {src_param.shape}")
+        
+        # Also handle buffers (non-parameter tensors)
+        for name, buffer in model.named_buffers():
+            total_params += 1
+            if name in state_dict:
+                src_buffer = state_dict[name]
+                if buffer.shape == src_buffer.shape:
+                    try:
+                        buffer.copy_(src_buffer)
+                        applied_params += 1
+                    except:
+                        print(f"Failed to copy buffer: {name}")
+        
+        print(f"Applied {applied_params}/{total_params} parameters")
+        return model
 
 def load_QF_ckpt(config_path):
     config = OmegaConf.load(config_path)
