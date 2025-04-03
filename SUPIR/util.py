@@ -35,23 +35,78 @@ def create_model(config_path):
 
 def create_SUPIR_model(config_path, SUPIR_sign=None, load_default_setting=False, load_weights=True):
     config = OmegaConf.load(config_path)
+    # Instantiate the model structure first (potentially using meta tensors)
+    print("Instantiating model structure...")
     model = instantiate_from_config(config.model)
     print(f'Loaded model config from [{config_path}]')
-    
+
     if load_weights:
-        if config.SDXL_CKPT is not None:
-            model.load_state_dict(load_state_dict(config.SDXL_CKPT), strict=False)
-        if config.SUPIR_CKPT is not None:
-            model.load_state_dict(load_state_dict(config.SUPIR_CKPT), strict=False)
-        if SUPIR_sign is not None:
+        print("Starting concurrent weight loading...")
+        start_time = time.time()
+        checkpoints_to_load = []
+        
+        # Determine which checkpoints are needed
+        if config.get('SDXL_CKPT'): # Use .get for safer access
+            checkpoints_to_load.append(config.SDXL_CKPT)
+            print(f"  - Queued SDXL: {os.path.basename(config.SDXL_CKPT)}")
+            
+        # Deprecated single SUPIR_CKPT, prefer F/Q specific
+        # if config.get('SUPIR_CKPT'): 
+        #     checkpoints_to_load.append(config.SUPIR_CKPT)
+        #     print(f"  - Queued SUPIR (generic): {os.path.basename(config.SUPIR_CKPT)}")
+
+        if SUPIR_sign:
             assert SUPIR_sign in ['F', 'Q']
-            if SUPIR_sign == 'F':
-                model.load_state_dict(load_state_dict(config.SUPIR_CKPT_F), strict=False)
-            elif SUPIR_sign == 'Q':
-                model.load_state_dict(load_state_dict(config.SUPIR_CKPT_Q), strict=False)
-    
+            ckpt_key = f'SUPIR_CKPT_{SUPIR_sign}'
+            if config.get(ckpt_key):
+                checkpoints_to_load.append(config.get(ckpt_key))
+                print(f"  - Queued SUPIR-{SUPIR_sign}: {os.path.basename(config.get(ckpt_key))}")
+        
+        # Helper function for loading a single checkpoint
+        def load_single_checkpoint(path):
+            print(f"    Starting load for: {os.path.basename(path)}")
+            load_start = time.time()
+            sd = load_state_dict(path)
+            load_end = time.time()
+            print(f"    Finished load for: {os.path.basename(path)} in {load_end - load_start:.2f}s")
+            return sd
+
+        # Load checkpoints concurrently
+        loaded_state_dicts = []
+        # Use a number of workers appropriate for concurrent I/O, 
+        # limited by the number of checkpoints to avoid creating unnecessary threads.
+        max_workers = min(len(checkpoints_to_load), 4) # Example: Limit to 4 workers or fewer
+        if max_workers > 0:
+             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_path = {executor.submit(load_single_checkpoint, path): path for path in checkpoints_to_load}
+                for future in concurrent.futures.as_completed(future_to_path):
+                    path = future_to_path[future]
+                    try:
+                        state_dict = future.result()
+                        loaded_state_dicts.append(state_dict)
+                    except Exception as exc:
+                        print(f'ERROR: {os.path.basename(path)} generated an exception during loading: {exc}')
+        
+        # Merge the state dicts (later dicts overwrite earlier ones if keys conflict)
+        print("Merging loaded state dictionaries...")
+        merged_state_dict = {}
+        for sd in loaded_state_dicts:
+            merged_state_dict.update(sd)
+        print("State dictionaries merged.")
+
+        # Apply the merged state dict to the model structure
+        print("Applying merged state dictionary to model structure...")
+        apply_start = time.time()
+        # Using strict=False as before, assuming partial loading is intended
+        model.load_state_dict(merged_state_dict, strict=False) 
+        apply_end = time.time()
+        print(f"Merged state dictionary applied in {apply_end - apply_start:.2f}s.")
+        
+        total_load_time = time.time() - start_time
+        print(f"Concurrent weight loading and application finished in {total_load_time:.2f} seconds.")
+
     if load_default_setting:
-        default_setting = config.default_setting
+        default_setting = config.get('default_setting', {}) # Use .get for safety
         return model, default_setting
     return model
 
