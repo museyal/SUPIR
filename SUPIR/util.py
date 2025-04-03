@@ -6,6 +6,8 @@ from PIL import Image
 from torch.nn.functional import interpolate
 from omegaconf import OmegaConf
 from sgm.util import instantiate_from_config
+import concurrent.futures
+import time
 
 
 def get_state_dict(d):
@@ -65,8 +67,87 @@ def create_empty_SUPIR_model(config_path, SUPIR_sign=None):
     Returns:
         An instantiated but empty model structure
     """
+    start_time = time.time()
     print(f"Creating empty model structure from {config_path} (may use meta tensors internally)")
-    return create_SUPIR_model(config_path, SUPIR_sign=SUPIR_sign, load_weights=False)
+    
+    # Load configuration
+    config = OmegaConf.load(config_path)
+    model_config = config.model
+    
+    # Split model initialization into parallelizable components
+    # This is model-specific, but most diffusion models have similar components
+    def init_unet():
+        try:
+            # Try to create just the UNet component
+            if 'unet_config' in model_config:
+                from sgm.util import instantiate_from_config
+                unet = instantiate_from_config(model_config.unet_config)
+                print(f"UNet initialized in {time.time() - start_time:.2f} seconds")
+                return ('unet', unet)
+        except Exception as e:
+            print(f"Error initializing UNet: {e}")
+        return None
+    
+    def init_first_stage():
+        try:
+            # Try to create just the first stage model (VAE)
+            if 'first_stage_config' in model_config:
+                from sgm.util import instantiate_from_config
+                first_stage = instantiate_from_config(model_config.first_stage_config)
+                print(f"First stage model initialized in {time.time() - start_time:.2f} seconds")
+                return ('first_stage_model', first_stage)
+        except Exception as e:
+            print(f"Error initializing first stage model: {e}")
+        return None
+    
+    def init_cond_stage():
+        try:
+            # Try to create just the conditioning model
+            if 'cond_stage_config' in model_config:
+                from sgm.util import instantiate_from_config
+                cond_stage = instantiate_from_config(model_config.cond_stage_config)
+                print(f"Conditioning stage model initialized in {time.time() - start_time:.2f} seconds")
+                return ('cond_stage_model', cond_stage)
+        except Exception as e:
+            print(f"Error initializing conditioning stage model: {e}")
+        return None
+    
+    # Try parallel initialization first
+    try:
+        # Create base model
+        model = create_SUPIR_model(config_path, SUPIR_sign=SUPIR_sign, load_weights=False)
+        parallel_init_start = time.time()
+        
+        # Check if components can be initialized separately
+        components = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            component_futures = [
+                executor.submit(init_unet),
+                executor.submit(init_first_stage),
+                executor.submit(init_cond_stage)
+            ]
+            
+            for future in concurrent.futures.as_completed(component_futures):
+                result = future.result()
+                if result:
+                    components.append(result)
+        
+        # If we have at least one component initialized separately, use them
+        if components:
+            print(f"Parallel component initialization completed in {time.time() - parallel_init_start:.2f} seconds")
+            for component_name, component in components:
+                try:
+                    # Replace the component in the model
+                    setattr(model, component_name, component)
+                    print(f"Replaced {component_name} with separately initialized component")
+                except Exception as e:
+                    print(f"Error replacing {component_name}: {e}")
+        
+        return model
+    except Exception as e:
+        print(f"Parallel initialization failed: {e}, falling back to standard method")
+        # Fall back to standard method
+        return create_SUPIR_model(config_path, SUPIR_sign=SUPIR_sign, load_weights=False)
 
 def apply_weights_to_model(model, state_dict, strict=False):
     """Apply weights to a model using zero-copy techniques when possible.
