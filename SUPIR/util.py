@@ -56,6 +56,7 @@ def create_SUPIR_model(config_path, SUPIR_sign=None, load_default_setting=False,
 def create_empty_SUPIR_model(config_path, SUPIR_sign=None):
     """Create an empty SUPIR model structure without loading weights.
     This helps avoid the meta tensor error during model instantiation.
+    The model may be instantiated with meta tensors initially, which have no memory footprint.
     
     Args:
         config_path: Path to the SUPIR model config
@@ -64,6 +65,7 @@ def create_empty_SUPIR_model(config_path, SUPIR_sign=None):
     Returns:
         An instantiated but empty model structure
     """
+    print(f"Creating empty model structure from {config_path} (may use meta tensors internally)")
     return create_SUPIR_model(config_path, SUPIR_sign=SUPIR_sign, load_weights=False)
 
 def apply_weights_to_model(model, state_dict, strict=False):
@@ -77,9 +79,12 @@ def apply_weights_to_model(model, state_dict, strict=False):
     Returns:
         The model with weights applied
     """
+    # First prepare the state dict to ensure compatibility with meta tensors
+    prepared_dict = prepare_state_dict_for_meta_tensors(state_dict)
+    
     try:
         # First try the standard way
-        incompatible_keys = model.load_state_dict(state_dict, strict=strict)
+        incompatible_keys = model.load_state_dict(prepared_dict, strict=strict)
         if incompatible_keys.missing_keys:
             print(f"Missing keys: {len(incompatible_keys.missing_keys)}")
         if incompatible_keys.unexpected_keys:
@@ -96,10 +101,19 @@ def apply_weights_to_model(model, state_dict, strict=False):
         # Iterate over all named parameters
         for name, param in model.named_parameters():
             total_params += 1
-            if name in state_dict:
+            if name in prepared_dict:
                 # Handle potential device mismatch
-                src_param = state_dict[name]
+                src_param = prepared_dict[name]
                 if param.shape == src_param.shape:
+                    # Check if parameter is on meta device
+                    if param.device.type == 'meta':
+                        # Create empty tensor first
+                        if hasattr(param, 'to_empty'):
+                            param = param.to_empty(device='cpu')
+                        else:
+                            # Manually create empty tensor
+                            param.data = torch.empty(param.shape, device='cpu')
+                    
                     # Zero-copy when possible by using storage offset
                     try:
                         param.data = src_param.data
@@ -114,9 +128,14 @@ def apply_weights_to_model(model, state_dict, strict=False):
         # Also handle buffers (non-parameter tensors)
         for name, buffer in model.named_buffers():
             total_params += 1
-            if name in state_dict:
-                src_buffer = state_dict[name]
+            if name in prepared_dict:
+                src_buffer = prepared_dict[name]
                 if buffer.shape == src_buffer.shape:
+                    # Check if buffer is on meta device
+                    if buffer.device.type == 'meta':
+                        # Create empty tensor first
+                        buffer = torch.empty(buffer.shape, device='cpu')
+                    
                     try:
                         buffer.copy_(src_buffer)
                         applied_params += 1
@@ -303,3 +322,23 @@ def convert_dtype(dtype_str):
         return torch.bfloat16
     else:
         raise NotImplementedError
+
+def prepare_state_dict_for_meta_tensors(state_dict):
+    """Prepares a state_dict for use with meta tensors by removing device information.
+    
+    This ensures that the state_dict can be safely applied to models with meta tensors.
+    
+    Args:
+        state_dict: The state dictionary to prepare
+        
+    Returns:
+        The prepared state dictionary
+    """
+    prepared_dict = {}
+    for k, v in state_dict.items():
+        if hasattr(v, 'cpu'):
+            # Detach and convert to CPU
+            prepared_dict[k] = v.detach().cpu()
+        else:
+            prepared_dict[k] = v
+    return prepared_dict
